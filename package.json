@@ -1,0 +1,12 @@
+{
+  "name": "vouchr",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "bun bot.ts",
+    "dev": "bun --watch bot.ts"
+  },
+  "dependencies": {
+    "yapin.js": "latest"
+  }
+}
