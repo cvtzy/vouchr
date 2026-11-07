@@ -9,7 +9,6 @@ for (const k of ['YAPIN_TOKEN', 'SUPABASE_URL', 'SUPABASE_SERVICE_KEY'])
 const VERSION = env.VERSION ?? 'unset';
 const COLOR = '#000000';
 const STICK_DELAY = 2500; // ms of quiet before the sticky hops back to the bottom
-const SLASH = new Set(['help', 'setup']); // the only commands usable with "/"
 const VOUCH = /^\+(?:vouch|vch|v)(?=\s|$)\s*([\s\S]*)$/i;
 
 // ───────────────────────── supabase ─────────────────────────
@@ -52,7 +51,7 @@ const saveSticky = (g: Guild, id: string) => {
 
 // ───────────────────────── bot ─────────────────────────
 const client = new Client({
-  prefixes: ['/', '.'],
+  prefixes: ['/', '.', '-'],
   intents: [Intents.Messages],
   presence: { status: 'online', activity: '+vouch · /help' },
 });
@@ -155,11 +154,28 @@ client.on(Events.MessageCreate, async (m: any) => {
 });
 
 // ───────────────────────── commands ─────────────────────────
-// "/" only works for /help and /setup; everything else is "." only
+// "/" = /help only · "-" = -setup only · "." = everything else
 client.commands.use(async (ctx: any, next: any) => {
-  if (ctx.prefix === '/' && !SLASH.has(ctx.command.name)) return;
+  const name = ctx.command.name;
+  if (ctx.prefix === '/' && name !== 'help') return;
+  if (ctx.prefix === '-' && name !== 'setup') return;
+  if (ctx.prefix === '.' && name === 'setup') return;
   await next();
 });
+
+// owner, or anyone holding a role with Manage Server (checked by hand so role quirks can't block it)
+async function canSetup(ctx: any) {
+  const s = ctx.server;
+  if (ctx.authorId === s.ownerId) return true;
+  try {
+    await s.roles.fetch();
+    const mem: any = await s.members.fetch(ctx.authorId);
+    return [...mem.roles.cache.values()].some((r: any) => r.manageServer || r.perms?.administrator || r.perms?.manage_server);
+  } catch (e) {
+    console.error('[perm]', e);
+    return false;
+  }
+}
 
 client.commands.register({
   name: 'help',
@@ -172,7 +188,7 @@ client.commands.register({
           .setDescription(
             [
               '`+vouch <text>` · `+vch` · `+v`  leave a vouch',
-              '`/setup [#channel]`  set the vouch channel',
+              '`-setup [#channel]`  set the vouch channel (owner / manage server)',
               '`.ping`  latency, specs, server info',
               '`.version` · `.v` · `.vers`  version',
             ].join('\n'),
@@ -185,9 +201,28 @@ client.commands.register({
   name: 'setup',
   description: 'pick the channel vouches go in',
   serverOnly: true,
-  permissions: ['manage_server'], // server owner always passes
+  register: false, // prefix-only: -setup
   options: [{ name: 'channel', type: 'channel', channelTypes: ['text'], default: (ctx: any) => ctx.channel, description: 'defaults to this channel' }],
   async run(ctx: any) {
+    // messages can't be truly ephemeral, so reply, then wipe the command and the reply after a few seconds
+    const done = async (payload: any) => {
+      const sent: any = await ctx.reply(payload);
+      ctx.message?.delete?.()?.catch?.(() => {});
+      setTimeout(() => sent?.delete?.()?.catch?.(() => {}), 8000);
+    };
+    if (!(await canSetup(ctx))) return done('only the server owner or someone with a **Manage Server** role can run this');
+
+    try {
+      await setup(ctx, done);
+    } catch (e: any) {
+      console.error('[setup]', e);
+      await done(`setup failed: ${String(e?.message ?? e).slice(0, 300)}`);
+    }
+  },
+});
+
+async function setup(ctx: any, done: (p: any) => Promise<void>) {
+  {
     const ch = ctx.values.channel;
     const sid = ctx.server.id;
     const prev = await getGuild(sid);
@@ -211,10 +246,10 @@ client.commands.register({
     }
     guilds.set(sid, g);
 
-    await ctx.reply({ embeds: [card().setDescription(`vouches are live in ${ch}\npost \`+vouch @user reason\` there`)] });
+    await done({ embeds: [card().setDescription(`vouches are live in ${ch}\npost \`+vouch @user reason\` there`)] });
     await enqueue(sid, () => stick(g));
-  },
-});
+  }
+}
 
 client.commands.register({
   name: 'ping',
